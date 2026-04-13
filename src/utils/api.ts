@@ -8,6 +8,67 @@ import { supabase } from './supabase'
 
 let serverOnline = true;
 
+// ============================================================================
+// HELPER: Fetch all rows with pagination (bypass Supabase 1000 row limit)
+// ============================================================================
+
+async function fetchAllRows(
+  table: string,
+  options?: {
+    select?: string;
+    filters?: Array<{ column: string; operator: string; value: unknown }>;
+    orderBy?: Array<{ column: string; ascending: boolean }>;
+  }
+): Promise<Record<string, unknown>[]> {
+  const PAGE_SIZE = 1000;
+  let allData: Record<string, unknown>[] = [];
+  let from = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    let query = supabase
+      .from(table)
+      .select(options?.select || '*');
+
+    // Apply filters
+    if (options?.filters) {
+      for (const f of options.filters) {
+        if (f.operator === 'gte') query = query.gte(f.column, f.value);
+        else if (f.operator === 'lte') query = query.lte(f.column, f.value);
+        else if (f.operator === 'eq') query = query.eq(f.column, f.value);
+        else if (f.operator === 'neq') query = query.neq(f.column, f.value);
+      }
+    }
+
+    // Apply ordering
+    if (options?.orderBy) {
+      for (const o of options.orderBy) {
+        query = query.order(o.column, { ascending: o.ascending });
+      }
+    }
+
+    // Apply pagination
+    query = query.range(from, from + PAGE_SIZE - 1);
+
+    const { data, error } = await query;
+
+    if (error) throw new Error(error.message);
+
+    if (data && data.length > 0) {
+      allData = allData.concat(data);
+      from += PAGE_SIZE;
+      // If we got less than PAGE_SIZE, we've reached the end
+      if (data.length < PAGE_SIZE) {
+        hasMore = false;
+      }
+    } else {
+      hasMore = false;
+    }
+  }
+
+  return allData;
+}
+
 interface MaintenanceRecord {
   id: string;
   no: number;
@@ -324,29 +385,29 @@ export const maintenanceAPI = {
   // GET ALL RECORDS
   // ========================================================================
   async getAll(): Promise<MaintenanceRecord[]> {
-    const { data, error } = await supabase
-      .from('maintenance_records')
-      .select('*')
-      .order('created_at', { ascending: false });
+    const data = await fetchAllRows('maintenance_records', {
+      orderBy: [{ column: 'created_at', ascending: false }],
+    });
 
-    if (error) throw new Error(error.message);
-    return (data || []).map(dbToFrontend);
+    return data.map(dbToFrontend);
   },
 
   // ========================================================================
   // GET RECORDS BY DATE RANGE
   // ========================================================================
   async getByDateRange(startDate: string, endDate: string): Promise<MaintenanceRecord[]> {
-    const { data, error } = await supabase
-      .from('maintenance_records')
-      .select('*')
-      .gte('maintenance_date', startDate)
-      .lte('maintenance_date', endDate)
-      .order('maintenance_date', { ascending: false })
-      .order('created_at', { ascending: false });
+    const data = await fetchAllRows('maintenance_records', {
+      filters: [
+        { column: 'maintenance_date', operator: 'gte', value: startDate },
+        { column: 'maintenance_date', operator: 'lte', value: endDate },
+      ],
+      orderBy: [
+        { column: 'maintenance_date', ascending: false },
+        { column: 'created_at', ascending: false },
+      ],
+    });
 
-    if (error) throw new Error(error.message);
-    return (data || []).map(dbToFrontend);
+    return data.map(dbToFrontend);
   },
 
   // ========================================================================
@@ -629,22 +690,28 @@ export const maintenanceAPI = {
   },
 
   async getAllHistory(limit?: number): Promise<HistoryLog[]> {
-    let query = supabase
-      .from('trolley_history_logs')
-      .select('*')
-      .order('maintenance_date', { ascending: false })
-      .order('changed_at', { ascending: false });
-
     if (limit) {
-      query = query.limit(limit);
-    } else {
-      query = query.limit(1000);
+      // If a specific limit is requested, use a single query
+      const { data, error } = await supabase
+        .from('trolley_history_logs')
+        .select('*')
+        .order('maintenance_date', { ascending: false })
+        .order('changed_at', { ascending: false })
+        .limit(limit);
+
+      if (error) throw new Error(error.message);
+      return (data || []).map(formatHistoryLog);
     }
 
-    const { data, error } = await query;
+    // No limit → fetch ALL history logs with pagination
+    const data = await fetchAllRows('trolley_history_logs', {
+      orderBy: [
+        { column: 'maintenance_date', ascending: false },
+        { column: 'changed_at', ascending: false },
+      ],
+    });
 
-    if (error) throw new Error(error.message);
-    return (data || []).map(formatHistoryLog);
+    return data.map(formatHistoryLog);
   },
 };
 
