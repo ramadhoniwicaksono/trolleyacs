@@ -23,8 +23,8 @@ Sistem manajemen maintenance trolley berbasis web dengan React + Supabase.
 ### 1. Clone & Install
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/trolley-maintenance.git
-cd trolley-maintenance
+git clone https://github.com/ramadhoniwicaksono/trolleyacs.git
+cd trolleyacs
 npm install
 ```
 
@@ -43,8 +43,8 @@ cp .env.example .env
 ```
 
 ```env
-VITE_SUPABASE_URL=https://YOUR_PROJECT_ID.supabase.co
-VITE_SUPABASE_ANON_KEY=your_supabase_anon_key_here
+VITE_SUPABASE_URL=your_supabase_project_url
+VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
 ```
 
 ### 4. Jalankan
@@ -52,13 +52,6 @@ VITE_SUPABASE_ANON_KEY=your_supabase_anon_key_here
 ```bash
 npm run dev
 ```
-
-## Default Users
-
-| Username | Password | Role |
-|----------|----------|------|
-| admin | password | Admin (full access) |
-| operator | password | Operator (read-only) |
 
 ## Database Schema
 
