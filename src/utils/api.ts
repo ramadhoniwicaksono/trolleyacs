@@ -494,24 +494,12 @@ export const maintenanceAPI = {
   // DELETE SINGLE RECORD
   // ========================================================================
   async delete(id: string): Promise<void> {
-    // Get record before deleting for history
-    const { data: recordToDelete } = await supabase
-      .from('maintenance_records')
-      .select('*')
-      .eq('id', id)
-      .single();
-
     const { error } = await supabase
       .from('maintenance_records')
       .delete()
       .eq('id', id);
 
     if (error) throw new Error(error.message);
-
-    // Log history
-    if (recordToDelete) {
-      await logHistory(recordToDelete, 'DELETED');
-    }
   },
 
   // ========================================================================

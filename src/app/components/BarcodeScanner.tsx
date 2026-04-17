@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Html5Qrcode } from 'html5-qrcode';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './ui/dialog';
 import { Button } from './ui/button';
-import { Camera, Upload, X, ScanLine, RotateCcw, ImageIcon } from 'lucide-react';
+import { Camera, X, ScanLine, RotateCcw, ImageIcon, CheckCircle2 } from 'lucide-react';
 
 interface BarcodeScannerProps {
   open: boolean;
@@ -13,6 +13,9 @@ interface BarcodeScannerProps {
 }
 
 type ScanMode = 'choose' | 'camera' | 'upload';
+
+// Minimum consecutive identical scans required to confirm a result
+const REQUIRED_CONFIRMATIONS = 3;
 
 export default function BarcodeScanner({
   open,
@@ -25,9 +28,15 @@ export default function BarcodeScanner({
   const [scanResult, setScanResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isScanning, setIsScanning] = useState(false);
+  const [detecting, setDetecting] = useState(false);
   const html5QrCodeRef = useRef<Html5Qrcode | null>(null);
   const scannerContainerId = 'barcode-scanner-container';
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Confirmation tracking refs (not state, to avoid re-renders during fast scanning)
+  const lastScannedValueRef = useRef<string | null>(null);
+  const confirmationCountRef = useRef<number>(0);
+  const scanLockedRef = useRef<boolean>(false);
 
   // Cleanup scanner on unmount or when dialog closes
   const stopScanner = useCallback(async () => {
@@ -46,6 +55,10 @@ export default function BarcodeScanner({
       console.debug('Scanner cleanup:', err);
     }
     setIsScanning(false);
+    setDetecting(false);
+    lastScannedValueRef.current = null;
+    confirmationCountRef.current = 0;
+    scanLockedRef.current = false;
   }, []);
 
   // Reset state when dialog opens/closes
@@ -63,7 +76,11 @@ export default function BarcodeScanner({
     setError(null);
     setScanResult(null);
     setIsScanning(true);
+    setDetecting(false);
     setMode('camera');
+    lastScannedValueRef.current = null;
+    confirmationCountRef.current = 0;
+    scanLockedRef.current = false;
 
     // Wait for DOM to render the container
     await new Promise((resolve) => setTimeout(resolve, 300));
@@ -82,24 +99,46 @@ export default function BarcodeScanner({
       await html5QrCode.start(
         { facingMode: 'environment' }, // Prefer rear camera
         {
-          fps: 10,
-          qrbox: { width: 280, height: 150 },
+          fps: 5, // Slower FPS = more stable reads, less false positives
+          qrbox: { width: 300, height: 180 }, // Larger scan area for better mobile detection
           aspectRatio: 1.5,
         },
         (decodedText) => {
-          // Success callback
-          setScanResult(decodedText);
-          // Stop scanning after success
-          html5QrCode.stop().then(() => {
-            html5QrCode.clear();
-            html5QrCodeRef.current = null;
-            setIsScanning(false);
-          }).catch(() => {
-            setIsScanning(false);
-          });
+          // Prevent processing if already locked (confirmed result being processed)
+          if (scanLockedRef.current) return;
+
+          const trimmedText = decodedText.trim();
+          if (!trimmedText) return;
+
+          // Check if this is the same value as the last scan
+          if (trimmedText === lastScannedValueRef.current) {
+            confirmationCountRef.current += 1;
+          } else {
+            // Different value detected — reset confirmation
+            lastScannedValueRef.current = trimmedText;
+            confirmationCountRef.current = 1;
+            setDetecting(true);
+          }
+
+          // Only accept the result after REQUIRED_CONFIRMATIONS consecutive identical reads
+          if (confirmationCountRef.current >= REQUIRED_CONFIRMATIONS) {
+            scanLockedRef.current = true;
+            setDetecting(false);
+            setScanResult(trimmedText);
+
+            // Stop scanning after confirmed success
+            html5QrCode.stop().then(() => {
+              html5QrCode.clear();
+              html5QrCodeRef.current = null;
+              setIsScanning(false);
+            }).catch(() => {
+              setIsScanning(false);
+            });
+          }
         },
         () => {
-          // Ignore scan failures (called frequently when no barcode in view)
+          // No barcode in view — reset detection state after a pause
+          // (but don't reset confirmation immediately to allow gaps between frames)
         }
       );
     } catch (err: any) {
@@ -159,6 +198,10 @@ export default function BarcodeScanner({
   const handleRetry = () => {
     setScanResult(null);
     setError(null);
+    setDetecting(false);
+    lastScannedValueRef.current = null;
+    confirmationCountRef.current = 0;
+    scanLockedRef.current = false;
     if (mode === 'camera') {
       startCameraScanner();
     } else {
@@ -214,14 +257,36 @@ export default function BarcodeScanner({
             <div className="space-y-3">
               <div
                 id={scannerContainerId}
-                className="w-full rounded-lg overflow-hidden bg-black min-h-[250px] relative"
+                className="w-full rounded-lg overflow-hidden bg-black min-h-[280px] relative"
               />
-              {isScanning && (
+
+              {/* Scanning status indicator */}
+              {isScanning && !detecting && (
                 <div className="flex items-center justify-center gap-2 text-sm text-blue-600">
                   <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
-                  Arahkan kamera ke barcode...
+                  Arahkan kamera ke barcode secara stabil...
                 </div>
               )}
+
+              {/* Detecting — barcode found but confirming */}
+              {isScanning && detecting && (
+                <div className="flex items-center justify-center gap-2 text-sm text-amber-600 font-medium">
+                  <div className="w-2 h-2 bg-amber-500 rounded-full animate-ping" />
+                  Barcode terdeteksi, tahan posisi...
+                </div>
+              )}
+
+              {/* Tips for better scanning */}
+              <div className="bg-blue-50 border border-blue-100 rounded-lg p-3">
+                <p className="text-xs text-blue-700 font-medium mb-1">💡 Tips scan akurat:</p>
+                <ul className="text-xs text-blue-600 space-y-0.5 list-disc list-inside">
+                  <li>Tahan HP secara stabil, jangan bergerak</li>
+                  <li>Pastikan barcode dalam kotak scan</li>
+                  <li>Jaga jarak 10-15 cm dari barcode</li>
+                  <li>Pastikan pencahayaan cukup terang</li>
+                </ul>
+              </div>
+
               <Button
                 variant="outline"
                 size="sm"
@@ -258,12 +323,8 @@ export default function BarcodeScanner({
             <div className="space-y-4">
               <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4">
                 <div className="flex items-center gap-2 mb-2">
-                  <div className="w-6 h-6 bg-emerald-500 rounded-full flex items-center justify-center">
-                    <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                    </svg>
-                  </div>
-                  <p className="text-sm font-medium text-emerald-800">Barcode Terdeteksi!</p>
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                  <p className="text-sm font-medium text-emerald-800">Barcode Terkonfirmasi!</p>
                 </div>
                 <div className="bg-white rounded-md p-3 border border-emerald-100">
                   <p className="text-lg font-mono font-bold text-gray-900 break-all">{scanResult}</p>
