@@ -1374,6 +1374,29 @@ export default function App() {
             determinedInput = rawInputStr;
           }
 
+          const remarksData = {
+            bodyPart: toBool(getVal(['BP', 'BODY PART', 'Body Part'])),
+            brakeSystem: toBool(getVal(['BR', 'BRAKE SYSTEM', 'Brake System'])),
+            magnetRusak: toBool(getVal(['M', 'MAGNET RUSAK', 'Magnet Rusak'])),
+            rodaRusak: toBool(getVal(['WS', 'RODA RUSAK', 'Roda Rusak'])),
+            lockPart: toBool(getVal(['LP', 'LOCK PART', 'Lock Part'])),
+            swivelSingle: false,
+            magnetBaru: toBool(getVal(['N.M', 'NEW MAGNET'])),
+            rodaBaru: toBool(getVal(['N.WS', 'NEW WHEELS'])),
+            stikerBarcode: toBool(getVal(['N.BR', 'NEW BRAKE'])),
+            uttReck: false,
+          };
+
+          const hasConditionIssue = remarksData.bodyPart || remarksData.brakeSystem || remarksData.magnetRusak || remarksData.rodaRusak || remarksData.lockPart;
+
+          let determinedStatus = hasConditionIssue ? 'UNSERVICEABLE' : 'SERVICEABLE';
+          const rawStatusStr = String(getVal(['CATEGORY', 'CONDITION', 'Status', 'Category']) || '').toUpperCase();
+          if (rawStatusStr === 'RUSAK' || rawStatusStr === 'UNSERVICEABLE') {
+            determinedStatus = 'UNSERVICEABLE';
+          } else if (rawStatusStr === 'BAIK' || rawStatusStr === 'SERVICEABLE') {
+            determinedStatus = 'SERVICEABLE';
+          }
+
           const record = {
             no: maxNo + index + 1,
             partNo,
@@ -1384,22 +1407,11 @@ export default function App() {
             remarkText: String(getVal(['REMARK', 'Remark']) || ''),
             remarksBarcode: String(getVal(['REMARKS BARCODE', 'Remarks Barcode']) || ''),
             po: String(getVal(['PO', 'Po']) || ''),
-            remarks: {
-              bodyPart: toBool(getVal(['BP', 'BODY PART', 'Body Part'])),
-              brakeSystem: toBool(getVal(['BR', 'BRAKE SYSTEM', 'Brake System'])),
-              magnetRusak: toBool(getVal(['M', 'MAGNET RUSAK', 'Magnet Rusak'])),
-              rodaRusak: toBool(getVal(['WS', 'RODA RUSAK', 'Roda Rusak'])),
-              lockPart: toBool(getVal(['LP', 'LOCK PART', 'Lock Part'])),
-              swivelSingle: false,
-              magnetBaru: toBool(getVal(['N.M', 'NEW MAGNET'])),
-              rodaBaru: toBool(getVal(['N.WS', 'NEW WHEELS'])),
-              stikerBarcode: toBool(getVal(['N.BR', 'NEW BRAKE'])),
-              uttReck: false,
-            },
+            remarks: remarksData,
             from: String(getVal(['FROM', 'From']) || ''),
             delivery: String(getVal(['DELIVERY', 'Delivery']) || ''),
             input: determinedInput as 'IN' | 'OUT' | 'REP' | 'COD',
-            status: (String(getVal(['CATEGORY', 'CONDITION', 'Status', 'Category']) || 'SERVICEABLE').toUpperCase() === 'RUSAK' ? 'UNSERVICEABLE' : 'SERVICEABLE') as 'SERVICEABLE' | 'UNSERVICEABLE',
+            status: determinedStatus as 'SERVICEABLE' | 'UNSERVICEABLE',
             date: dateValue.toISOString(),
           };
 
