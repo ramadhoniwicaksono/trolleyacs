@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS maintenance_records (
     no INTEGER NOT NULL DEFAULT 0,
     part_no TEXT NOT NULL DEFAULT '',
     serial TEXT NOT NULL UNIQUE,
-    type TEXT NOT NULL DEFAULT 'FULL' CHECK (type IN ('FULL', 'HALF')),
+    type TEXT NOT NULL DEFAULT 'FULL-ATLAS' CHECK (type IN ('FULL-ATLAS', 'HALF-ATLAS', 'FULL-REKONDISI', 'HALF-REKONDISI')),
     atlas TEXT DEFAULT '',
     
     -- Remarks fields
@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS trolley_history_logs (
     action TEXT NOT NULL CHECK (action IN ('CREATED', 'UPDATED', 'DELETED')),
     
     part_no TEXT,
-    type TEXT CHECK (type IS NULL OR type IN ('FULL', 'HALF')),
+    type TEXT CHECK (type IS NULL OR type IN ('FULL-ATLAS', 'HALF-ATLAS', 'FULL-REKONDISI', 'HALF-REKONDISI')),
     status TEXT CHECK (status IS NULL OR status IN ('SERVICEABLE', 'UNSERVICEABLE')),
     input_type TEXT CHECK (input_type IS NULL OR input_type IN ('IN', 'OUT', 'REP', 'COD')),
     from_location TEXT,

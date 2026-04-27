@@ -88,7 +88,7 @@ interface MaintenanceRecord {
   no: number;
   partNo: string;
   serial: string;
-  type: 'FULL' | 'HALF';
+  type: 'FULL-ATLAS' | 'HALF-ATLAS' | 'FULL-REKONDISI' | 'HALF-REKONDISI';
   atlas: string;
   remarks: {
     lockPart: boolean;
@@ -104,7 +104,7 @@ interface MaintenanceRecord {
   };
   from: string;
   delivery: string;
-  input: 'IN' | 'OUT' | 'REP';
+  input: 'IN' | 'OUT' | 'REP' | 'COD';
   posisi: string;
   remarkText: string;
   remarksBarcode: string;
@@ -155,14 +155,16 @@ export default function App() {
   const [formBarcodeScannerOpen, setFormBarcodeScannerOpen] = useState(false);
   const [searchBarcodeScannerOpen, setSearchBarcodeScannerOpen] = useState(false);
 
+  const [customPartNo, setCustomPartNo] = useState('');
+
   const [formData, setFormData] = useState({
     partNo: '',
     serial: '',
-    type: 'FULL' as 'FULL' | 'HALF',
+    type: 'FULL-ATLAS' as 'FULL-ATLAS' | 'HALF-ATLAS' | 'FULL-REKONDISI' | 'HALF-REKONDISI',
     atlas: '',
     from: '',
     delivery: '',
-    input: 'IN' as 'IN' | 'OUT' | 'REP',
+    input: 'IN' as 'IN' | 'OUT' | 'REP' | 'COD',
     posisi: '',
     remarkText: '',
     remarksBarcode: '',
@@ -381,8 +383,9 @@ export default function App() {
   // Memoize analytics data to prevent recalculation on every render
   // Single-pass counting for maximum performance with large datasets
   const analyticsData = useMemo(() => {
-    let fullCount = 0, halfCount = 0;
-    let fullSvc = 0, fullUnsvc = 0, halfSvc = 0, halfUnsvc = 0;
+    let fullAtlasCount = 0, halfAtlasCount = 0, fullRekCount = 0, halfRekCount = 0;
+    let fullAtlasSvc = 0, fullAtlasUnsvc = 0, halfAtlasSvc = 0, halfAtlasUnsvc = 0;
+    let fullRekSvc = 0, fullRekUnsvc = 0, halfRekSvc = 0, halfRekUnsvc = 0;
     let okCount = 0, rusakCount = 0;
     let inCount = 0, outCount = 0, repCount = 0;
     let bpCount = 0, brCount = 0, mCount = 0, wsCount = 0, lpCount = 0;
@@ -393,12 +396,18 @@ export default function App() {
       const unsvc = r.remarks.bodyPart || r.remarks.brakeSystem || r.remarks.magnetRusak || r.remarks.rodaRusak || r.remarks.lockPart;
 
       // Type
-      if (r.type === 'FULL') {
-        fullCount++;
-        if (unsvc) fullUnsvc++; else fullSvc++;
-      } else {
-        halfCount++;
-        if (unsvc) halfUnsvc++; else halfSvc++;
+      if (r.type === 'FULL-ATLAS') {
+        fullAtlasCount++;
+        if (unsvc) fullAtlasUnsvc++; else fullAtlasSvc++;
+      } else if (r.type === 'HALF-ATLAS') {
+        halfAtlasCount++;
+        if (unsvc) halfAtlasUnsvc++; else halfAtlasSvc++;
+      } else if (r.type === 'FULL-REKONDISI') {
+        fullRekCount++;
+        if (unsvc) fullRekUnsvc++; else fullRekSvc++;
+      } else if (r.type === 'HALF-REKONDISI') {
+        halfRekCount++;
+        if (unsvc) halfRekUnsvc++; else halfRekSvc++;
       }
 
       // Status
@@ -424,12 +433,16 @@ export default function App() {
 
     return {
       typeData: [
-        { name: 'FULL', value: fullCount },
-        { name: 'HALF', value: halfCount },
+        { name: 'FULL-ATLAS', value: fullAtlasCount },
+        { name: 'HALF-ATLAS', value: halfAtlasCount },
+        { name: 'FULL-REK', value: fullRekCount },
+        { name: 'HALF-REK', value: halfRekCount },
       ],
       typeBreakdownData: [
-        { name: 'FULL', serviceable: fullSvc, unserviceable: fullUnsvc },
-        { name: 'HALF', serviceable: halfSvc, unserviceable: halfUnsvc },
+        { name: 'F-ATLAS', serviceable: fullAtlasSvc, unserviceable: fullAtlasUnsvc },
+        { name: 'H-ATLAS', serviceable: halfAtlasSvc, unserviceable: halfAtlasUnsvc },
+        { name: 'F-REK', serviceable: fullRekSvc, unserviceable: fullRekUnsvc },
+        { name: 'H-REK', serviceable: halfRekSvc, unserviceable: halfRekUnsvc },
       ],
       statusData: [
         { name: 'OK', value: okCount },
@@ -530,6 +543,11 @@ export default function App() {
     }));
   }, [records, inputYear, inputMonth]);
 
+  // Gunakan hanya part number bawaan agar dropdown tidak penuh dengan data dari history yang mungkin kotor (salah ketik, dsb)
+  const availablePartNumbers = useMemo(() => {
+    return ["TK600052", "TL600016", "TL600018", "TK5080001", "TL503001", "TK800004", "CM1001-106GA", "TL060007", "TK075006", "DLH 072-138"];
+  }, []);
+
   const handleCheckboxChange = (key: string) => {
     setFormData((prev) => ({
       ...prev,
@@ -548,7 +566,9 @@ export default function App() {
   };
 
   const handleSubmit = async () => {
-    if (!formData.partNo || !formData.serial) {
+    const finalPartNo = formData.partNo === 'LAINNYA' ? customPartNo : formData.partNo;
+
+    if (!finalPartNo || !formData.serial) {
       toast.error('Part No dan Serial harus diisi!');
       return;
     }
@@ -556,10 +576,12 @@ export default function App() {
     try {
       setLoading(true);
 
+      const submitData = { ...formData, partNo: finalPartNo };
+
       if (editingId !== null) {
         // Update existing record (via edit button)
         await maintenanceAPI.update(editingId, {
-          ...formData,
+          ...submitData,
           date: date.toISOString(),
         });
         toast.success('🔄 Update Data — Serial Number "' + formData.serial + '" berhasil diupdate!');
@@ -569,7 +591,7 @@ export default function App() {
         // Backend returns 201 for new records, 200 for auto-updated duplicates
         const maxNo = records.length > 0 ? Math.max(...records.map(r => r.no)) : 0;
         const result = await maintenanceAPI.create({
-          ...formData,
+          ...submitData,
           no: maxNo + 1,
           date: date.toISOString(),
         });
@@ -588,7 +610,7 @@ export default function App() {
       setFormData({
         partNo: '',
         serial: '',
-        type: 'FULL',
+        type: 'FULL-ATLAS',
         atlas: '',
         from: '',
         delivery: '',
@@ -611,6 +633,7 @@ export default function App() {
           uttReck: false,
         },
       });
+      setCustomPartNo('');
       setDate(new Date());
     } catch (error) {
       console.error('Error saving record:', error);
@@ -623,8 +646,10 @@ export default function App() {
   };
 
   const handleEdit = (record: MaintenanceRecord) => {
+    const isCustom = !availablePartNumbers.includes(record.partNo);
+    
     setFormData({
-      partNo: record.partNo,
+      partNo: isCustom ? 'LAINNYA' : record.partNo,
       serial: record.serial,
       type: record.type,
       atlas: record.atlas || '',
@@ -638,6 +663,11 @@ export default function App() {
       po: record.po || '',
       remarks: { ...record.remarks, uttReck: record.remarks.uttReck || false },
     });
+    if (isCustom) {
+      setCustomPartNo(record.partNo);
+    } else {
+      setCustomPartNo('');
+    }
     setEditingId(record.id);
     setDate(new Date(record.date));
     // Pindah ke tab Form untuk edit
@@ -776,8 +806,10 @@ export default function App() {
 
     if (existingRecord) {
       // Auto-fill entire form with existing data (like Edit mode)
+      const isCustom = !availablePartNumbers.includes(existingRecord.partNo);
+      
       setFormData({
-        partNo: existingRecord.partNo,
+        partNo: isCustom ? 'LAINNYA' : existingRecord.partNo,
         serial: existingRecord.serial,
         type: existingRecord.type,
         atlas: existingRecord.atlas || '',
@@ -791,6 +823,11 @@ export default function App() {
         po: existingRecord.po || '',
         remarks: { ...existingRecord.remarks, uttReck: existingRecord.remarks.uttReck || false },
       });
+      if (isCustom) {
+        setCustomPartNo(existingRecord.partNo);
+      } else {
+        setCustomPartNo('');
+      }
       setEditingId(existingRecord.id);
       setDate(new Date(existingRecord.date));
       toast.success(`📷 Serial Number "${value}" ditemukan! Data telah dimuat ke form untuk di-update.`);
@@ -828,14 +865,16 @@ export default function App() {
     const titleRow = ['Ceklist Form Maintenance Trolley', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''];
     const legendRow = ['BP ( BODY PART )', '', 'BR ( BRAKE )', 'M ( MAGNET )', '', 'WS ( WHEELS )', '', 'LP ( LOCK PART )', '', 'N.M ( NEW MAGNET )', '', '', 'N.WS ( NEW WHEELS )', '', 'N.BR ( NEW BRAKE )', '', '', '', ''];
     const dateRow = ['', '', '', '', '', '', '', '', '', '', '', '', '', '', 'Date :', format(new Date(), 'dd/MM/yyyy'), '', '', ''];
-    const headerRow = ['NO', 'PART NUMBER', 'SERIAL NUMBER', 'Full', 'Half', 'BP', 'WS', 'BR', 'LP', 'M', 'N.M', 'N.WS', 'N.BR', 'FROM', 'DELIVERY', 'In', 'Out', 'Rep', 'Cod'];
+    const headerRow = ['NO', 'PART NUMBER', 'SERIAL NUMBER', 'Full-Atlas', 'Half-Atlas', 'Full-Rekondisi', 'Half-Rekondisi', 'BP', 'WS', 'BR', 'LP', 'M', 'N.M', 'N.WS', 'N.BR', 'FROM', 'DELIVERY', 'In', 'Out', 'Rep', 'Cod', 'Date', 'PO'];
 
     const dataRows = sortedRecords.map((record) => [
       record.no,
       record.partNo,
       record.serial,
-      record.type === 'FULL',
-      record.type === 'HALF',
+      record.type === 'FULL-ATLAS' ? 'v' : '',
+      record.type === 'HALF-ATLAS' ? 'v' : '',
+      record.type === 'FULL-REKONDISI' ? 'v' : '',
+      record.type === 'HALF-REKONDISI' ? 'v' : '',
       record.remarks.bodyPart,
       record.remarks.rodaRusak,
       record.remarks.brakeSystem,
@@ -849,7 +888,9 @@ export default function App() {
       record.input === 'IN',
       record.input === 'OUT',
       record.input === 'REP',
-      record.input === 'COD' || true, // COD is always true for every trolley
+      true,
+      record.date,
+      record.po
     ]);
 
     const ws1 = XLSX.utils.aoa_to_sheet([titleRow, legendRow, dateRow, headerRow, ...dataRows]);
@@ -861,7 +902,7 @@ export default function App() {
     ];
     ws1['!cols'] = [
       { wch: 5 }, { wch: 15 }, { wch: 15 },
-      { wch: 8 }, { wch: 8 },
+      { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 },
       { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 },
       { wch: 8 }, { wch: 8 }, { wch: 8 },
       { wch: 10 }, { wch: 10 },
@@ -872,7 +913,9 @@ export default function App() {
     let historyRows: any[][] = [];
     try {
       toast.info('Mengambil data history untuk export...', { duration: 3000, id: 'export-history' });
-      const allHistory = await maintenanceAPI.getAllHistory(5000);
+      const allHistoryRaw = await maintenanceAPI.getAllHistory(5000);
+      // Filter out DELETED history logs from export
+      const allHistory = allHistoryRaw.filter(log => log.action !== 'DELETED');
       toast.dismiss('export-history');
 
       const historyHeader = ['SERIAL NUMBER', 'TANGGAL MAINTENANCE', 'WAKTU INPUT', 'ACTION', 'STATUS', 'TYPE', 'INPUT', 'BP', 'WS', 'BR', 'LP', 'M', 'N.M', 'N.WS', 'N.BR', 'FROM', 'DELIVERY', 'DESKRIPSI', 'CHANGED BY'];
@@ -1314,14 +1357,29 @@ export default function App() {
             }
           }
 
-          const typeVal = String(getVal(['TYPE', 'Type']) || 'FULL').toUpperCase();
+          let determinedType = 'FULL-ATLAS';
+          if (toBool(getVal(['Half-Atlas', 'HALF-ATLAS', 'Half-Atlas ']))) determinedType = 'HALF-ATLAS';
+          else if (toBool(getVal(['Full-Rekondisi', 'FULL-REKONDISI', 'Full-Rekondisi ']))) determinedType = 'FULL-REKONDISI';
+          else if (toBool(getVal(['Half-Rekondisi', 'HALF-REKONDISI', 'Half-Rekondisi ']))) determinedType = 'HALF-REKONDISI';
+          else if (toBool(getVal(['Full-Atlas', 'FULL-ATLAS', 'Full-Atlas ']))) determinedType = 'FULL-ATLAS';
+
+          let determinedInput = 'IN';
+          if (toBool(getVal(['Out', 'OUT']))) determinedInput = 'OUT';
+          else if (toBool(getVal(['Rep', 'REP']))) determinedInput = 'REP';
+          else if (toBool(getVal(['Cod', 'COD']))) determinedInput = 'COD';
+          else if (toBool(getVal(['In', 'IN']))) determinedInput = 'IN';
+          
+          const rawInputStr = String(getVal(['INPUT', 'Input'])).toUpperCase();
+          if (rawInputStr === 'OUT' || rawInputStr === 'REP' || rawInputStr === 'COD' || rawInputStr === 'IN') {
+            determinedInput = rawInputStr;
+          }
 
           const record = {
             no: maxNo + index + 1,
             partNo,
             serial,
-            type: (typeVal === 'HALF' ? 'HALF' : 'FULL') as 'FULL' | 'HALF',
-            atlas: 'ATLAS',
+            type: determinedType as 'FULL-ATLAS' | 'HALF-ATLAS' | 'FULL-REKONDISI' | 'HALF-REKONDISI',
+            atlas: determinedType.includes('ATLAS') ? 'ATLAS' : 'REKONDISI',
             posisi: String(getVal(['POSISI', 'Posisi']) || ''),
             remarkText: String(getVal(['REMARK', 'Remark']) || ''),
             remarksBarcode: String(getVal(['REMARKS BARCODE', 'Remarks Barcode']) || ''),
@@ -1333,14 +1391,14 @@ export default function App() {
               rodaRusak: toBool(getVal(['WS', 'RODA RUSAK', 'Roda Rusak'])),
               lockPart: toBool(getVal(['LP', 'LOCK PART', 'Lock Part'])),
               swivelSingle: false,
-              magnetBaru: false,
-              rodaBaru: false,
-              stikerBarcode: false,
+              magnetBaru: toBool(getVal(['N.M', 'NEW MAGNET'])),
+              rodaBaru: toBool(getVal(['N.WS', 'NEW WHEELS'])),
+              stikerBarcode: toBool(getVal(['N.BR', 'NEW BRAKE'])),
               uttReck: false,
             },
             from: String(getVal(['FROM', 'From']) || ''),
             delivery: String(getVal(['DELIVERY', 'Delivery']) || ''),
-            input: (String(getVal(['INPUT', 'Input']) || 'IN').toUpperCase() || 'IN') as 'IN' | 'OUT' | 'REP',
+            input: determinedInput as 'IN' | 'OUT' | 'REP' | 'COD',
             status: (String(getVal(['CATEGORY', 'CONDITION', 'Status', 'Category']) || 'SERVICEABLE').toUpperCase() === 'RUSAK' ? 'UNSERVICEABLE' : 'SERVICEABLE') as 'SERVICEABLE' | 'UNSERVICEABLE',
             date: dateValue.toISOString(),
           };
@@ -1356,7 +1414,7 @@ export default function App() {
       const validRecords = [];
       const errors = [];
       for (let i = 0; i < jsonData.length; i++) {
-        const record = convertContohRow(jsonData[i], i);
+        const record = convertLegacyRow(jsonData[i], i);
         if (record) {
           validRecords.push(record);
         } else {
@@ -1477,7 +1535,7 @@ export default function App() {
     // Row 3: Date
     const dateRow = ['', '', '', '', '', '', '', '', '', '', '', '', '', '', 'Date :', '', '', '', ''];
     // Row 4: Column headers
-    const headerRow = ['NO', 'PART NUMBER', 'SERIAL NUMBER', 'Full', 'Half', 'BP', 'WS', 'BR', 'LP', 'M', 'N.M', 'N.WS', 'N.BR', 'FROM', 'DELIVERY', 'In', 'Out', 'Rep', 'Cod'];
+    const headerRow = ['NO', 'PART NUMBER', 'SERIAL NUMBER', 'Full-Atlas', 'Half-Atlas', 'Full-Rekondisi', 'Half-Rekondisi', 'BP', 'WS', 'BR', 'LP', 'M', 'N.M', 'N.WS', 'N.BR', 'FROM', 'DELIVERY', 'In', 'Out', 'Rep', 'Cod', 'Date', 'PO'];
 
     // Sample data rows (19 columns)
     const sampleRow1 = [1, 'TK600052', '16261269', false, true, false, false, false, false, false, true, false, true, 'CGK', 'DPS', true, false, false, false];
@@ -1707,18 +1765,21 @@ export default function App() {
                         <SelectValue placeholder="Pilih Part Number" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="TK600052">TK600052</SelectItem>
-                        <SelectItem value="TL600016">TL600016</SelectItem>
-                        <SelectItem value="TL600018">TL600018</SelectItem>
-                        <SelectItem value="TK5080001">TK5080001</SelectItem>
-                        <SelectItem value="TL503001">TL503001</SelectItem>
-                        <SelectItem value="TK800004">TK800004</SelectItem>
-                        <SelectItem value="CM1001-106GA">CM1001-106GA</SelectItem>
-                        <SelectItem value="TL060007">TL060007</SelectItem>
-                        <SelectItem value="TK075006">TK075006</SelectItem>
-                        <SelectItem value="DLH 072-138">DLH 072-138</SelectItem>
+                        {availablePartNumbers.map(part => (
+                          <SelectItem key={part} value={part}>{part}</SelectItem>
+                        ))}
+                        <SelectItem value="LAINNYA" className="font-bold text-blue-600">Lainnya (Input Manual)...</SelectItem>
                       </SelectContent>
                     </Select>
+                    {formData.partNo === 'LAINNYA' && (
+                      <Input
+                        placeholder="Ketik part number baru..."
+                        value={customPartNo}
+                        onChange={(e) => setCustomPartNo(e.target.value)}
+                        className="mt-2 border-blue-300 focus-visible:ring-blue-500"
+                        autoFocus
+                      />
+                    )}
                   </div>
                   <div>
                     <Label htmlFor="serial">Serial Number</Label>
@@ -1743,13 +1804,15 @@ export default function App() {
                   </div>
                   <div>
                     <Label htmlFor="type">Type</Label>
-                    <Select value={formData.type} onValueChange={(value) => handleInputChange('type', value)}>
+                    <Select value={formData.type} onValueChange={(value: any) => handleInputChange('type', value)}>
                       <SelectTrigger className="mt-2">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="FULL">FULL</SelectItem>
-                        <SelectItem value="HALF">HALF</SelectItem>
+                        <SelectItem value="FULL-ATLAS">FULL-ATLAS</SelectItem>
+                        <SelectItem value="HALF-ATLAS">HALF-ATLAS</SelectItem>
+                        <SelectItem value="FULL-REKONDISI">FULL-REKONDISI</SelectItem>
+                        <SelectItem value="HALF-REKONDISI">HALF-REKONDISI</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -1835,6 +1898,7 @@ export default function App() {
                         <SelectItem value="IN">IN</SelectItem>
                         <SelectItem value="OUT">OUT</SelectItem>
                         <SelectItem value="REP">REP</SelectItem>
+                        <SelectItem value="COD">COD</SelectItem>
 
                       </SelectContent>
                     </Select>
@@ -1876,7 +1940,7 @@ export default function App() {
                         setFormData({
                           partNo: '',
                           serial: '',
-                          type: 'FULL',
+                          type: 'FULL-ATLAS',
                           atlas: '',
                           from: '',
                           delivery: '',
@@ -2069,12 +2133,14 @@ export default function App() {
                                 <Label className="text-xs mb-1 block">Type</Label>
                                 <Select value={filterType} onValueChange={setFilterType}>
                                   <SelectTrigger className="h-8">
-                                    <SelectValue placeholder="Semua Type" />
+                                    <SelectValue placeholder="Semua Tipe" />
                                   </SelectTrigger>
                                   <SelectContent>
-                                    <SelectItem value="ALL">Semua Type</SelectItem>
-                                    <SelectItem value="FULL">FULL</SelectItem>
-                                    <SelectItem value="HALF">HALF</SelectItem>
+                                    <SelectItem value="ALL">Semua Tipe</SelectItem>
+                                    <SelectItem value="FULL-ATLAS">FULL-ATLAS</SelectItem>
+                                    <SelectItem value="HALF-ATLAS">HALF-ATLAS</SelectItem>
+                                    <SelectItem value="FULL-REKONDISI">FULL-REKONDISI</SelectItem>
+                                    <SelectItem value="HALF-REKONDISI">HALF-REKONDISI</SelectItem>
                                   </SelectContent>
                                 </Select>
                               </div>
@@ -2260,7 +2326,7 @@ export default function App() {
                                   </td>
                                   <td className="p-2 overflow-hidden" style={{ width: '12%' }}>
                                     <span
-                                      className={`px-2 py-1 rounded text-xs font-medium ${record.type === 'FULL' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800'}`}
+                                      className={`px-2 py-1 rounded text-xs font-medium ${record.type.includes('FULL') ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800'}`}
                                     >
                                       {record.type}
                                     </span>

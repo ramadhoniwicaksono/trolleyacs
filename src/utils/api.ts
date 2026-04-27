@@ -74,7 +74,7 @@ interface MaintenanceRecord {
   no: number;
   partNo: string;
   serial: string;
-  type: 'FULL' | 'HALF';
+  type: 'FULL-ATLAS' | 'HALF-ATLAS' | 'FULL-REKONDISI' | 'HALF-REKONDISI';
   atlas: string;
   remarks: {
     lockPart: boolean;
@@ -90,7 +90,7 @@ interface MaintenanceRecord {
   };
   from: string;
   delivery: string;
-  input: 'IN' | 'OUT' | 'REP';
+  input: 'IN' | 'OUT' | 'REP' | 'COD';
   posisi: string;
   remarkText: string;
   remarksBarcode: string;
@@ -175,7 +175,7 @@ function dbToFrontend(record: Record<string, unknown>): MaintenanceRecord {
     no: Number(record.no) || 0,
     partNo: (record.part_no as string) || '',
     serial: (record.serial as string) || '',
-    type: (record.type as 'FULL' | 'HALF') || 'FULL',
+    type: (record.type as 'FULL-ATLAS' | 'HALF-ATLAS' | 'FULL-REKONDISI' | 'HALF-REKONDISI') || 'FULL-ATLAS',
     atlas: (record.atlas as string) || '',
     remarks: {
       lockPart: Boolean(record.remark_lock_part),
@@ -191,7 +191,7 @@ function dbToFrontend(record: Record<string, unknown>): MaintenanceRecord {
     },
     from: (record.from_location as string) || '',
     delivery: (record.delivery as string) || '',
-    input: (record.input_type as 'IN' | 'OUT' | 'REP') || 'IN',
+    input: (record.input_type as 'IN' | 'OUT' | 'REP' | 'COD') || 'IN',
     posisi: (record.posisi as string) || '',
     remarkText: (record.remark_text as string) || '',
     remarksBarcode: (record.remarks_barcode as string) || '',
@@ -212,7 +212,7 @@ function frontendToDb(record: Record<string, unknown>): Record<string, unknown> 
     no: record.no ?? 0,
     part_no: record.partNo ?? '',
     serial: record.serial ?? '',
-    type: record.type ?? 'FULL',
+    type: record.type ?? 'FULL-ATLAS',
     atlas: record.atlas ?? '',
     remark_lock_part: remarks.lockPart ?? false,
     remark_brake_system: remarks.brakeSystem ?? false,
@@ -268,7 +268,7 @@ function buildHistoryDescription(
       parts.push('Kondisi: ' + activeRemarks.join(', ') + '.');
     }
     parts.push('Status: ' + (record.status || 'SERVICEABLE') + '.');
-    parts.push('Type: ' + (record.type || 'FULL') + '.');
+    parts.push('Type: ' + (record.type || 'FULL-ATLAS') + '.');
     parts.push('Input: ' + (record.input_type || 'IN') + '.');
     return parts.join(' ');
   }
@@ -579,62 +579,109 @@ export const maintenanceAPI = {
       console.log(`\n📤 Batch ${batchIndex + 1}/${totalBatches} | Records ${start + 1}-${end}`);
 
       try {
-        // Process each record in the batch
+        const serials = batch.map(r => r.serial).filter(Boolean);
+        if (serials.length === 0) continue;
+
+        // 1. Fetch existing records in bulk to know what to update vs insert
+        const { data: existingRecords } = await supabase
+          .from('maintenance_records')
+          .select('*')
+          .in('serial', serials);
+          
+        const existingMap = new Map((existingRecords || []).map(r => [r.serial, r]));
+
+        // 2. Prepare data for Upsert
+        const upsertData: any[] = [];
+        const validBatchContexts: any[] = []; // To keep track for history logging
+        
         for (let i = 0; i < batch.length; i++) {
           const record = batch[i];
-          const serial = record.serial;
-
-          if (!serial) {
+          if (!record.serial) {
             errorCount++;
             errors.push(`Record ${start + i + 1}: Serial number kosong`);
             continue;
           }
-
-          try {
-            const dbData = frontendToDb(record as unknown as Record<string, unknown>);
-
-            // Check if serial already exists
-            const { data: existing } = await supabase
-              .from('maintenance_records')
-              .select('*')
-              .eq('serial', serial)
-              .maybeSingle();
-
-            if (existing) {
-              // Update existing record
-              const { data: updated, error: updateError } = await supabase
-                .from('maintenance_records')
-                .update(dbData)
-                .eq('serial', serial)
-                .select()
-                .single();
-
-              if (updateError) throw new Error(updateError.message);
-
-              await logHistory(updated, 'UPDATED', existing);
-              updateCount++;
-            } else {
-              // Insert new record
-              const id = generateId() + '-' + (start + i);
-              const insertData = { ...dbData, id };
-
-              const { data: created, error: insertError } = await supabase
-                .from('maintenance_records')
-                .insert(insertData)
-                .select()
-                .single();
-
-              if (insertError) throw new Error(insertError.message);
-
-              await logHistory(created, 'CREATED');
-            }
-
-            successCount++;
-          } catch (e) {
-            errorCount++;
-            const errMsg = e instanceof Error ? e.message : 'Unknown error';
-            errors.push(`Record ${start + i + 1}: ${errMsg}`);
+          
+          const dbData = frontendToDb(record as unknown as Record<string, unknown>);
+          const existing = existingMap.get(record.serial);
+          
+          if (existing) {
+            // Include existing ID for update
+            upsertData.push({ ...dbData, id: existing.id });
+            validBatchContexts.push({ isNew: false, oldRecord: existing });
+          } else {
+            // Generate new ID for insert
+            const id = generateId() + '-' + (start + i);
+            upsertData.push({ ...dbData, id });
+            validBatchContexts.push({ isNew: true, oldRecord: null });
           }
+        }
+
+        if (upsertData.length === 0) continue;
+
+        // 3. Execute Bulks Upsert
+        const { data: upsertedData, error: upsertError } = await supabase
+          .from('maintenance_records')
+          .upsert(upsertData, { onConflict: 'serial' })
+          .select();
+
+        if (upsertError) throw new Error(upsertError.message);
+
+        // 4. Prepare and Execute Bulk History Insert
+        const historyLogs: any[] = [];
+        const changedBy = getUserUsername();
+        
+        // Map upserted items back to their context using serial
+        const upsertMap = new Map((upsertedData || []).map(r => [r.serial, r]));
+        
+        for (const data of upsertData) {
+          const resultRecord = upsertMap.get(data.serial);
+          if (!resultRecord) continue;
+          
+          const existing = existingMap.get(data.serial);
+          const action = existing ? 'UPDATED' : 'CREATED';
+          const description = buildHistoryDescription(resultRecord, action, existing);
+          
+          historyLogs.push({
+            record_id: resultRecord.id,
+            serial: resultRecord.serial,
+            action,
+            part_no: resultRecord.part_no || null,
+            type: resultRecord.type || null,
+            status: resultRecord.status || null,
+            input_type: resultRecord.input_type || null,
+            from_location: resultRecord.from_location || null,
+            delivery: resultRecord.delivery || null,
+            maintenance_date: resultRecord.maintenance_date || null,
+            remark_body_part: Boolean(resultRecord.remark_body_part),
+            remark_brake_system: Boolean(resultRecord.remark_brake_system),
+            remark_lock_part: Boolean(resultRecord.remark_lock_part),
+            remark_magnet_rusak: Boolean(resultRecord.remark_magnet_rusak),
+            remark_roda_rusak: Boolean(resultRecord.remark_roda_rusak),
+            remark_magnet_baru: Boolean(resultRecord.remark_magnet_baru),
+            remark_roda_baru: Boolean(resultRecord.remark_roda_baru),
+            remark_rem_baru: Boolean(resultRecord.remark_rem_baru),
+            remark_swivel_single: Boolean(resultRecord.remark_swivel_single),
+            remark_utt_reck: Boolean(resultRecord.remark_utt_reck),
+            description,
+            changed_by: changedBy
+          });
+          
+          if (existing) {
+            updateCount++;
+          } else {
+            successCount++; // Treat inserts as 'successCount' directly
+          }
+        }
+        
+        // We actually want successCount to be total processed without duplicates inside itself 
+        // Our logic above separated them into updateCount and successCount (inserts). 
+        // We fix the total successCount for the batch correctly:
+        successCount += updateCount; // In legacy code it incremented successCount for both update and insert, and updateCount separately
+
+        if (historyLogs.length > 0) {
+          const { error: histError } = await supabase.from('trolley_history_logs').insert(historyLogs);
+          if (histError) console.error("Warning: Batch History Log Error", histError);
         }
 
         console.log(`   ✅ Batch ${batchIndex + 1} processed. Progress: ${((end / totalRecords) * 100).toFixed(1)}%`);
