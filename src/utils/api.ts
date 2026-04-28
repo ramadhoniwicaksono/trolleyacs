@@ -592,9 +592,8 @@ export const maintenanceAPI = {
         const existingMap = new Map((existingRecords || []).map(r => [r.serial, r]));
 
         // 2. Prepare data for Upsert
-        const upsertData: any[] = [];
-        const validBatchContexts: any[] = []; // To keep track for history logging
-        const skippedOlderRecords: { dbData: any; existing: any }[] = []; // Records with older dates (history only)
+        // First pass: collect all records per serial, then deduplicate (keep latest date)
+        const serialRecordsMap = new Map<string, { dbData: any; existing: any | null; index: number }[]>();
         
         for (let i = 0; i < batch.length; i++) {
           const record = batch[i];
@@ -607,43 +606,76 @@ export const maintenanceAPI = {
           const dbData = frontendToDb(record as unknown as Record<string, unknown>);
           const existing = existingMap.get(record.serial);
           
+          if (!serialRecordsMap.has(record.serial)) {
+            serialRecordsMap.set(record.serial, []);
+          }
+          serialRecordsMap.get(record.serial)!.push({ dbData, existing, index: start + i });
+        }
+        
+        // Second pass: for each serial, pick the record with the latest date for upsert
+        const upsertData: any[] = [];
+        const validBatchContexts: any[] = [];
+        const skippedOlderRecords: { dbData: any; existing: any }[] = [];
+        
+        for (const [serial, entries] of serialRecordsMap) {
+          // Sort entries by date descending → first entry has the latest date
+          entries.sort((a, b) => {
+            const dateA = a.dbData.maintenance_date ? new Date(String(a.dbData.maintenance_date)).getTime() : 0;
+            const dateB = b.dbData.maintenance_date ? new Date(String(b.dbData.maintenance_date)).getTime() : 0;
+            return dateB - dateA;
+          });
+          
+          const latestEntry = entries[0];
+          const olderEntries = entries.slice(1);
+          const existing = latestEntry.existing;
+          
           if (existing) {
-            // Compare dates - only update if imported date is newer or equal
+            // Compare with DB record date
             const existingDate = existing.maintenance_date ? new Date(existing.maintenance_date).getTime() : 0;
-            const importDate = dbData.maintenance_date ? new Date(String(dbData.maintenance_date)).getTime() : 0;
+            const importDate = latestEntry.dbData.maintenance_date ? new Date(String(latestEntry.dbData.maintenance_date)).getTime() : 0;
             
             if (importDate >= existingDate) {
-              // Imported data is newer or same date → UPDATE main record
-              upsertData.push({ ...dbData, id: existing.id });
+              // Latest imported data is newer or same date → UPDATE main record
+              upsertData.push({ ...latestEntry.dbData, id: existing.id });
               validBatchContexts.push({ isNew: false, oldRecord: existing });
             } else {
-              // Imported data is older → SKIP main record update, only log history
-              skippedOlderRecords.push({ dbData, existing });
+              // Even the latest import is older → skip all, only log history
+              skippedOlderRecords.push({ dbData: latestEntry.dbData, existing });
             }
           } else {
-            // Generate new ID for insert
-            const id = generateId() + '-' + (start + i);
-            upsertData.push({ ...dbData, id });
+            // New serial → INSERT with latest date
+            const id = generateId() + '-' + latestEntry.index;
+            upsertData.push({ ...latestEntry.dbData, id });
             validBatchContexts.push({ isNew: true, oldRecord: null });
+          }
+          
+          // All older duplicate entries within this batch → history only
+          for (const olderEntry of olderEntries) {
+            const refRecord = existing || { id: 'pending', maintenance_date: latestEntry.dbData.maintenance_date };
+            skippedOlderRecords.push({ dbData: olderEntry.dbData, existing: refRecord });
           }
         }
 
-        if (upsertData.length === 0) continue;
+        if (upsertData.length === 0 && skippedOlderRecords.length === 0) continue;
 
-        // 3. Execute Bulks Upsert
-        const { data: upsertedData, error: upsertError } = await supabase
-          .from('maintenance_records')
-          .upsert(upsertData, { onConflict: 'serial' })
-          .select();
+        // 3. Execute Bulks Upsert (only if there are records to upsert)
+        let upsertedData: any[] = [];
+        if (upsertData.length > 0) {
+          const { data, error: upsertError } = await supabase
+            .from('maintenance_records')
+            .upsert(upsertData, { onConflict: 'serial' })
+            .select();
 
-        if (upsertError) throw new Error(upsertError.message);
+          if (upsertError) throw new Error(upsertError.message);
+          upsertedData = data || [];
+        }
 
         // 4. Prepare and Execute Bulk History Insert
         const historyLogs: any[] = [];
         const changedBy = getUserUsername();
         
         // Map upserted items back to their context using serial
-        const upsertMap = new Map((upsertedData || []).map(r => [r.serial, r]));
+        const upsertMap = new Map(upsertedData.map(r => [r.serial, r]));
         
         for (const data of upsertData) {
           const resultRecord = upsertMap.get(data.serial);
