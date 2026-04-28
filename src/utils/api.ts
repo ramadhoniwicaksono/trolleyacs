@@ -548,7 +548,7 @@ export const maintenanceAPI = {
   async createBatch(
     records: Omit<MaintenanceRecord, 'id' | 'createdAt'>[],
     onProgress?: (current: number, total: number, successCount: number, errorCount: number) => void
-  ): Promise<{ successCount: number; updateCount: number; errorCount: number; errors: string[] }> {
+  ): Promise<{ successCount: number; updateCount: number; skipCount: number; errorCount: number; errors: string[] }> {
     if (!serverOnline) {
       throw new Error('❌ Batch import requires ONLINE mode! Server connection is required.');
     }
@@ -558,6 +558,7 @@ export const maintenanceAPI = {
 
     let successCount = 0;
     let updateCount = 0;
+    let skipCount = 0;
     let errorCount = 0;
     const errors: string[] = [];
 
@@ -593,6 +594,7 @@ export const maintenanceAPI = {
         // 2. Prepare data for Upsert
         const upsertData: any[] = [];
         const validBatchContexts: any[] = []; // To keep track for history logging
+        const skippedOlderRecords: { dbData: any; existing: any }[] = []; // Records with older dates (history only)
         
         for (let i = 0; i < batch.length; i++) {
           const record = batch[i];
@@ -606,9 +608,18 @@ export const maintenanceAPI = {
           const existing = existingMap.get(record.serial);
           
           if (existing) {
-            // Include existing ID for update
-            upsertData.push({ ...dbData, id: existing.id });
-            validBatchContexts.push({ isNew: false, oldRecord: existing });
+            // Compare dates - only update if imported date is newer or equal
+            const existingDate = existing.maintenance_date ? new Date(existing.maintenance_date).getTime() : 0;
+            const importDate = dbData.maintenance_date ? new Date(String(dbData.maintenance_date)).getTime() : 0;
+            
+            if (importDate >= existingDate) {
+              // Imported data is newer or same date → UPDATE main record
+              upsertData.push({ ...dbData, id: existing.id });
+              validBatchContexts.push({ isNew: false, oldRecord: existing });
+            } else {
+              // Imported data is older → SKIP main record update, only log history
+              skippedOlderRecords.push({ dbData, existing });
+            }
           } else {
             // Generate new ID for insert
             const id = generateId() + '-' + (start + i);
@@ -674,6 +685,35 @@ export const maintenanceAPI = {
           }
         }
         
+        // Add history logs for skipped older records (history only, no main record update)
+        for (const { dbData, existing } of skippedOlderRecords) {
+          historyLogs.push({
+            record_id: existing.id,
+            serial: dbData.serial,
+            action: 'CREATED',
+            part_no: dbData.part_no || null,
+            type: dbData.type || null,
+            status: dbData.status || null,
+            input_type: dbData.input_type || null,
+            from_location: dbData.from_location || null,
+            delivery: dbData.delivery || null,
+            maintenance_date: dbData.maintenance_date || null,
+            remark_body_part: Boolean(dbData.remark_body_part),
+            remark_brake_system: Boolean(dbData.remark_brake_system),
+            remark_lock_part: Boolean(dbData.remark_lock_part),
+            remark_magnet_rusak: Boolean(dbData.remark_magnet_rusak),
+            remark_roda_rusak: Boolean(dbData.remark_roda_rusak),
+            remark_magnet_baru: Boolean(dbData.remark_magnet_baru),
+            remark_roda_baru: Boolean(dbData.remark_roda_baru),
+            remark_rem_baru: Boolean(dbData.remark_rem_baru),
+            remark_swivel_single: Boolean(dbData.remark_swivel_single),
+            remark_utt_reck: Boolean(dbData.remark_utt_reck),
+            description: `Data historis (${dbData.maintenance_date}). Record utama tetap menggunakan data terbaru (${existing.maintenance_date}).`,
+            changed_by: changedBy,
+          });
+          skipCount++;
+        }
+        
         // We actually want successCount to be total processed without duplicates inside itself 
         // Our logic above separated them into updateCount and successCount (inserts). 
         // We fix the total successCount for the batch correctly:
@@ -704,9 +744,10 @@ export const maintenanceAPI = {
 
     console.log(`\n🎉 IMPORT TO SUPABASE COMPLETED!`);
     console.log(`✅ Success: ${successCount}/${totalRecords} (New: ${successCount - updateCount}, Updated: ${updateCount})`);
+    console.log(`⏭️ Skipped (older date): ${skipCount}`);
     console.log(`❌ Errors: ${errorCount}`);
 
-    return { successCount, updateCount, errorCount, errors };
+    return { successCount, updateCount, skipCount, errorCount, errors };
   },
 
   // ========================================================================

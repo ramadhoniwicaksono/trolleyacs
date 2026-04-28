@@ -1469,6 +1469,7 @@ export default function App() {
 
       successCount = result.successCount;
       const updateCount = result.updateCount || 0;
+      const skipCount = result.skipCount || 0;
       const createdCount = successCount - updateCount;
       errorCount = result.errorCount;
 
@@ -1500,10 +1501,11 @@ export default function App() {
 
       // Show result with actual database count
       // Show result with actual database count
-      if (successCount > 0) {
+      if (successCount > 0 || skipCount > 0) {
         const importDetails = [];
         if (createdCount > 0) importDetails.push(`🆕 ${createdCount} data baru dibuat`);
         if (updateCount > 0) importDetails.push(`🔄 ${updateCount} data diupdate`);
+        if (skipCount > 0) importDetails.push(`⏭️ ${skipCount} data dilewati (tanggal lebih lama)`);
         if (errorCount > 0) importDetails.push(`❌ ${errorCount} data gagal`);
 
         toast.success(`✅ Import berhasil!\n\n${importDetails.join('\n')}\n\n📊 Total data di database sekarang: ${records.length + createdCount} records`, {
